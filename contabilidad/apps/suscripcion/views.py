@@ -24,6 +24,51 @@ class SuscripcionViewSet(viewsets.GenericViewSet):
 
     def get_queryset(self):
         return Suscripcion.objects.filter(user=self.request.user)
+    
+    @action(detail=False, methods=['post'], url_path='cancelar')
+    def cancelar_suscripcion_activa(self, request):
+        """
+        Endpoint: POST /suscripcion/cancelar/
+        Cancela la suscripción activa del usuario, cambiándola al estado 'cancelado' o 'nulo'.
+        Esto permite al usuario seleccionar un nuevo plan.
+        """
+        user = request.user
+        
+        try:
+            # Intentar obtener el estado 'cancelado' o, si no existe, 'nulo'
+            # NOTA: Asegúrate de que el estado 'cancelado' o 'nulo' exista en tu tabla Estado.
+            try:
+                estado_inactivo = Estado.objects.get(nombre='cancelado')
+            except Estado.DoesNotExist:
+                # Fallback a 'nulo' si 'cancelado' no existe (como se sugiere en el flujo de pagos)
+                estado_inactivo = Estado.objects.get(nombre='nulo') 
+        except Estado.DoesNotExist:
+            return Response({"detail": "Error de configuración: Estado 'cancelado' o 'nulo' no encontrado."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        try:
+            estado_activo = Estado.objects.get(nombre='activo')
+            
+            # 1. Obtener la suscripción activa actual
+            suscripcion_activa = self.get_queryset().filter(estado=estado_activo).order_by('-fecha_inicio').first()
+
+            if not suscripcion_activa:
+                return Response({"detail": "No se encontró suscripción activa para cancelar."}, status=status.HTTP_404_NOT_FOUND)
+
+            # 2. Cancelar la suscripción dentro de una transacción
+            with transaction.atomic():
+                suscripcion_activa.estado = estado_inactivo
+                # Opcional: Establecer la fecha de fin a la fecha actual para cancelación inmediata
+                suscripcion_activa.fecha_fin = date.today()
+                suscripcion_activa.save()
+            
+            return Response({"detail": f"Suscripción {suscripcion_activa.codigo} cancelada exitosamente. Ahora puede seleccionar un nuevo plan."}, status=status.HTTP_200_OK)
+
+        except Estado.DoesNotExist:
+            return Response({"detail": "Error de configuración: Estado 'activo' no encontrado."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except Exception as e:
+            print(f"Error al cancelar suscripción: {e}")
+            return Response({"detail": f"Error interno al cancelar la suscripción: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
     @action(detail=False, methods=['get'], url_path='activa')
     def get_suscripcion_activa(self, request):
@@ -112,8 +157,8 @@ class SuscripcionViewSet(viewsets.GenericViewSet):
         identificador_deuda = f"SUB-{str(user.id).zfill(8)}-{uuid.uuid4().hex[:8]}" 
         
         callback_url = f"{settings.DJANGO_PUBLIC_URL}/suscripcion/pago_exitoso" #url del dominio del backend
-        return_url = f"https://contafrontoficial-393159630636.northamerica-south1.run.app/librovivo/darshboard" #url del dominio del frontend
-        
+        #return_url = f"https://next-conta.vercel.app/librovivo/darshboard" #url del dominio del frontend
+        return_url = f"{settings.FRONT_PUBLIC_URL}/librovivo/darshboard" #url del dominio del frontend
         # CORRECCIÓN CLAVE: El campo concepto debe ser una string válida y limpia
         concepto_item = f"Suscripción {tipo_plan.plan.nombre} {tipo_plan.duracion_mes} mes(es)"
         
